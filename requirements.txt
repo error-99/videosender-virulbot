@@ -1,0 +1,5 @@
+aiogram>=3.13,<4
+google-cloud-firestore>=2.16
+aiohttp>=3.9
+Pillow>=10.0
+python-dotenv>=1.0
