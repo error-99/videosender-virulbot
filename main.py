@@ -1,12 +1,12 @@
-"""Telegram multi-bot (aiogram 3) + web admin panel, backed by Firebase Firestore."""
+"""BOT SERVER - runs all Telegram bots (aiogram 3) from the bots stored in Firebase Firestore.
+Needs no open port: it only talks outward to Telegram and Firebase."""
 import asyncio
 import logging
 import signal
 import sys
 
-from app import backup, config, db
+from app import commands, config, db
 from app.runner import Supervisor
-from app.web import server
 
 
 def setup_logging() -> None:
@@ -23,18 +23,15 @@ def setup_logging() -> None:
 async def main() -> None:
     setup_logging()
     log = logging.getLogger("main")
-    if config.GENERATED_PASSWORD:
-        log.warning("ADMIN_PASSWORD is not set - temporary panel password for this run: %s", config.ADMIN_PASSWORD)
     try:
         await db.init()
     except Exception as e:
         log.error("Could not connect to Firebase: %s", e)
         return
-
     sup = Supervisor()
-    web_runner = await server.start(sup)
-    tasks = [asyncio.create_task(sup.run_forever()), asyncio.create_task(backup.auto_loop())]
-
+    tasks = [asyncio.create_task(sup.run_forever()), asyncio.create_task(commands.run_loop(sup)),
+             asyncio.create_task(commands.runtime_loop(sup)), asyncio.create_task(commands.housekeeping_loop()),
+             asyncio.create_task(commands.pending_groups_loop(sup))]
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
@@ -42,16 +39,20 @@ async def main() -> None:
             loop.add_signal_handler(sig, stop.set)
         except NotImplementedError:  # Windows
             pass
-    log.info("Running. Open the admin panel on port %s.", config.WEB_PORT)
+    log.info("Bot server running. Bots are read from Firebase every %ss; panel commands every %ss.",
+             config.SUPERVISOR_INTERVAL, config.COMMAND_POLL_IDLE)
     try:
         await stop.wait()
     except asyncio.CancelledError:
         pass
     log.info("Shutting down...")
-    await sup.shutdown()
     for t in tasks:
         t.cancel()
-    await web_runner.cleanup()
+    await sup.shutdown()
+    try:
+        await db.write_runtime({})
+    except Exception:
+        pass
     await db.close()
 
 
